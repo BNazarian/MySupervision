@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Donnees atmospheriques - IRM</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+body { font-family: Arial, sans-serif; background:#0f172a; color:#e2e8f0; margin:0; padding:20px; }
+h1 { text-align:center; }
+.card { background:#1e293b; max-width:900px; margin:20px auto; padding:24px;
+        border-radius:14px; position:relative; }
+.status-badge { position:absolute; top:20px; right:24px; font-size:1.4rem; }
+.value { font-size:18px; margin:8px 0; }
+.timestamp { color:#94a3b8; font-size:0.9rem; margin-top:8px; }
+canvas { margin-top:18px; }
+.controls { margin-top:16px; }
+select { padding:6px 10px; border-radius:8px; }
+</style>
+</head>
+<body>
+<h1>Donnees atmospheriques - salle IRM</h1>
+
+<div class="card">
+  <div id="status" class="status-badge">●</div>
+  <div class="value" id="temp">Temperature : --</div>
+  <div class="value" id="hum">Humidite : --</div>
+  <div class="value" id="press">Pression : --</div>
+  <div class="timestamp" id="time"></div>
+
+  <div class="controls">
+    <label for="range">Plage : </label>
+    <select id="range">
+      <option value="24">24 h</option>
+      <option value="48">48 h</option>
+      <option value="72">3 jours</option>
+    </select>
+  </div>
+
+  <canvas id="tempChart"  height="110"></canvas>
+  <canvas id="humChart"   height="110"></canvas>
+  <canvas id="pressChart" height="110"></canvas>
+</div>
+
+<script>
+// A ADAPTER : URL du projet + cle PUBLISHABLE (lecture seule, sans danger)
+const SUPABASE_URL = "https://vgjfvcbiexcsmncjmrff.supabase.co";
+const SUPABASE_KEY = "sb_publishable_2TerQIkqU4Kn-cwvSROCeQ_BSJiZGk_";
+
+const DEVICE = "arduino_atmo";
+let rangeHours = 24;
+let tempChart, humChart, pressChart;
+
+function fmtTime(utc){
+  return new Date(utc).toLocaleString("fr-FR",{ timeZone:"Europe/Paris",
+    day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false });
+}
+
+// Derniere mesure du module
+async function fetchLatest(){
+  const r = await fetch(
+    `${SUPABASE_URL}/rest/v1/measurements?device_id=eq.${DEVICE}&order=timestamp.desc&limit=1`,
+    { headers:{ "apikey":SUPABASE_KEY, "Authorization":`Bearer ${SUPABASE_KEY}` } });
+  return (await r.json())[0];
+}
+
+// Plage de mesures sur N heures
+async function fetchRange(hours){
+  const start = new Date(Date.now() - hours*3600*1000).toISOString();
+  const r = await fetch(
+    `${SUPABASE_URL}/rest/v1/measurements?device_id=eq.${DEVICE}&timestamp=gte.${start}&order=timestamp.asc&limit=6000`,
+    { headers:{ "apikey":SUPABASE_KEY, "Authorization":`Bearer ${SUPABASE_KEY}` } });
+  return await r.json();
+}
+
+function buildLabels(data){
+  return data.map(d=>new Date(d.timestamp).toLocaleString("fr-FR",{ timeZone:"Europe/Paris",
+    day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false }));
+}
+
+function makeChart(canvasId,data,label,field,color){
+  const ctx = document.getElementById(canvasId).getContext("2d");
+  return new Chart(ctx,{
+    type:"line",
+    data:{ labels:buildLabels(data),
+      datasets:[{ label, data:data.map(d=>d[field]), borderColor:color,
+        backgroundColor:color.replace(")",",0.1)").replace("rgb","rgba"),
+        tension:0.3, fill:true, pointRadius:0, pointHoverRadius:4 }]},
+    options:{ responsive:true,
+      scales:{ x:{ticks:{color:"#94a3b8",maxTicksLimit:10}},
+               y:{ticks:{color:"#94a3b8"}} },
+      plugins:{ legend:{labels:{color:"#e2e8f0"}} } }
+  });
+}
+
+async function refreshValues(){
+  const m = await fetchLatest();
+  if (!m) return;
+  document.getElementById("temp").textContent  = "Temperature : "+Number(m.temperature).toFixed(1)+" °C";
+  document.getElementById("hum").textContent   = "Humidite : "+Number(m.humidity).toFixed(1)+" %";
+  document.getElementById("press").textContent = "Pression : "+Number(m.pressure).toFixed(1)+" hPa";
+  document.getElementById("time").textContent  = "Derniere mesure : "+fmtTime(m.timestamp);
+
+  const diffMin = (Date.now() - new Date(m.timestamp)) / 60000;
+  document.getElementById("status").style.color = diffMin <= 2 ? "#22c55e" : "#ef4444";
+}
+
+async function loadCharts(){
+  const data = await fetchRange(rangeHours);
+  if (tempChart)  tempChart.destroy();
+  if (humChart)   humChart.destroy();
+  if (pressChart) pressChart.destroy();
+  tempChart  = makeChart("tempChart",  data, "Temperature (°C)", "temperature", "rgb(59,130,246)");
+  humChart   = makeChart("humChart",   data, "Humidite (%)",     "humidity",    "rgb(34,197,94)");
+  pressChart = makeChart("pressChart", data, "Pression (hPa)",   "pressure",    "rgb(239,68,68)");
+}
+
+document.getElementById("range").addEventListener("change", async function(){
+  rangeHours = Number(this.value);
+  await loadCharts();
+});
+
+async function init(){ await refreshValues(); await loadCharts(); }
+init();
+
+setInterval(refreshValues, 30000);   // valeurs courantes toutes les 30 s
+setInterval(loadCharts, 300000);     // graphiques toutes les 5 min
+</script>
+</body>
+</html>
